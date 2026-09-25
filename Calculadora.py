@@ -71,10 +71,12 @@ class CalculadoraApp(ctk.CTk):
 
         # Botones (layout)
         # Fila 0
+        # Fila 0
         self._crear_boton(frame_botones, "C", 0, 0, color="cancel")
         self._crear_boton(frame_botones, "+/-", 0, 1, color="neutral")
         self._crear_boton(frame_botones, "%", 0, 2, color="neutral")
-        self._crear_boton(frame_botones, "÷", 0, 3, color="operador")
+        self._crear_boton(frame_botones, "⌫", 0, 3, color="neutral")
+
 
         # Fila 1
         self._crear_boton(frame_botones, "7", 1, 0, color="numero")
@@ -95,10 +97,12 @@ class CalculadoraApp(ctk.CTk):
         self._crear_boton(frame_botones, "+", 3, 3, color="operador")
 
         # Fila 4: un botón por columna, sin superposición
-        self._crear_boton(frame_botones, "⌫", 4, 0, color="neutral")  # borrar carácter
+        # Fila 4
+        self._crear_boton(frame_botones, "÷", 4, 0, color="operador")
         self._crear_boton(frame_botones, "0", 4, 1, color="numero")
         self._crear_boton(frame_botones, ".", 4, 2, color="numero")
         self._crear_boton(frame_botones, "=", 4, 3, color="igual")
+
 
     def _crear_boton(self, contenedor, texto, fila, col, color="neutral", colspan=1):
         """Crea un botón con estilo y su acción asociada al evento."""
