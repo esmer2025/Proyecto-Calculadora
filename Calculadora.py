@@ -1,6 +1,8 @@
 # Calculadora.py
 import customtkinter as ctk
 import tkinter as tk
+import re
+from decimal import Decimal, localcontext
 
 
 class CalculadoraApp(ctk.CTk):
@@ -21,7 +23,8 @@ class CalculadoraApp(ctk.CTk):
         # Expresión mostrada y que luego se calcula al presionar "="
         self.expresion = ""
         # Entrada temporal para mostrar el resultado o operación
-        self.resultado_anterior = None  # opcional (no estrictamente necesario)
+        self.resultado_anterior = None
+        self.resultado_mostrado = False
 
         # --- Interfaz ---
         self._crear_interfaz()
@@ -91,9 +94,9 @@ class CalculadoraApp(ctk.CTk):
         self._crear_boton(frame_botones, "3", 3, 2, color="numero")
         self._crear_boton(frame_botones, "+", 3, 3, color="operador")
 
-        # Fila 4 (0 ocupa 2 columnas)
+        # Fila 4: un botón por columna, sin superposición
         self._crear_boton(frame_botones, "⌫", 4, 0, color="neutral")  # borrar carácter
-        self._crear_boton(frame_botones, "0", 4, 1, color="numero", colspan=2)
+        self._crear_boton(frame_botones, "0", 4, 1, color="numero")
         self._crear_boton(frame_botones, ".", 4, 2, color="numero")
         self._crear_boton(frame_botones, "=", 4, 3, color="igual")
 
@@ -139,7 +142,7 @@ class CalculadoraApp(ctk.CTk):
         if tecla.isdigit():
             self._accion_boton(tecla)
             return
-        if tecla == ".":
+        if tecla in (".", ","):
             self._accion_boton(".")
             return
 
@@ -156,7 +159,7 @@ class CalculadoraApp(ctk.CTk):
 
     def _accion_boton(self, texto):
         """Maneja el evento de cada botón según el texto del botón."""
-        if texto in "0123456789":
+        if len(texto) == 1 and texto in "0123456789":
             self._agregar_numero(texto)
         elif texto == ".":
             self._agregar_punto()
@@ -186,29 +189,31 @@ class CalculadoraApp(ctk.CTk):
         self.entrada.configure(state="readonly")
 
     def _agregar_numero(self, numero):
-        """Agrega dígitos a la expresión."""
-        # Evitar que la pantalla quede en "0" sin contexto
-        if self.expresion == "0":
-            self.expresion = numero
+        """Inicia otra cuenta tras =, o agrega un dígito al número actual."""
+        if self.resultado_mostrado:
+            self.expresion = ""
+            self.resultado_mostrado = False
+        token = self._token_actual()
+        if token in ("0", "-0"):
+            self.expresion = self.expresion[:-1] + numero
         else:
             self.expresion += numero
         self._set_entrada(self.expresion)
 
     def _agregar_punto(self):
-        """Agrega un punto decimal al número actual si no existe."""
-        if self._esta_vacio_o_cero():
-            self.expresion = "0."
-
-        # Extraer el "token" numérico actual (desde el final hasta el último operador)
+        """Añade un único punto decimal y actualiza siempre la pantalla."""
+        if self.resultado_mostrado:
+            self.expresion = ""
+            self.resultado_mostrado = False
         token = self._token_actual()
         if "." in token:
-            return  # no permitir dos puntos
-
-        self.expresion += "."
+            return
+        self.expresion += "0." if not token else "."
         self._set_entrada(self.expresion)
 
     def _agregar_operador(self, operador):
         """Agrega un operador a la expresión, cuidando el formato."""
+        self.resultado_mostrado = False
         # Si está vacío o solo "0", iniciamos con 0 (por ejemplo "0+")
         if self.expresion == "" or self.expresion == "0":
             if operador in ["+", "-"]:
@@ -231,10 +236,13 @@ class CalculadoraApp(ctk.CTk):
     def _limpiar_todo(self):
         """Limpia toda la expresión."""
         self.expresion = ""
+        self.resultado_mostrado = False
+        self.resultado_anterior = None
         self._set_entrada("0")
 
     def _borrar_caracter(self):
         """Borra el último carácter de la expresión."""
+        self.resultado_mostrado = False
         if self.expresion == "":
             self._set_entrada("0")
             return
@@ -245,214 +253,104 @@ class CalculadoraApp(ctk.CTk):
             self._set_entrada(self.expresion)
 
     def _porcentaje(self):
-        """
-        Convierte el número actual a porcentaje.
-        Ejemplo: 50% -> 50/100 = 0.5
-        """
-        if self.expresion == "" or self.expresion == "0":
-            self._set_entrada("0")
-            return
-
+        """Convierte solo el número actual: 50% = 0.5 (divide entre 100)."""
         token = self._token_actual()
-        try:
-            valor = float(token)
-            valor_pct = valor / 100.0
-
-            # Reemplazar solo el token numérico actual por el nuevo valor
-            inicio = len(self.expresion) - len(token)
-            self.expresion = self.expresion[:inicio] + self._formatear_decimal(valor_pct)
-
-            self._set_entrada(self.expresion)
-        except ValueError:
-            self._set_entrada("Error")
-
-    def _cambiar_signo(self):
-        """Cambia el signo del número actual (+/-)."""
-        if self.expresion == "" or self.expresion == "0":
-            # Si es 0, lo cambiamos a -0. (La pantalla mostrará 0 de forma limpia.)
-            self.expresion = "0"
-            self._set_entrada(self.expresion)
+        if not token:
             return
-
-        token = self._token_actual()
-        if token == "":
-            return
-
-        # Si el token empieza con '-' lo quitamos, si no, lo agregamos
-        if token.startswith("-"):
-            nuevo = token[1:]
-        else:
-            nuevo = "-" + token
-
+        with localcontext() as contexto:
+            contexto.prec = max(28, len(token) + 10)
+            valor = Decimal(token) / Decimal(100)
         inicio = len(self.expresion) - len(token)
-        self.expresion = self.expresion[:inicio] + nuevo
+        self.expresion = self.expresion[:inicio] + self._formatear_decimal(valor)
         self._set_entrada(self.expresion)
 
-    # =======================
-    # Cálculo seguro (sin eval)
-    # =======================
+    def _cambiar_signo(self):
+        """Alterna el signo del último número sin cambiar la operación."""
+        token = self._token_actual()
+        if not token:
+            # Permite introducir un negativo al inicio o después de un operador.
+            self.expresion += "-0"
+        else:
+            nuevo = token[1:] if token.startswith("-") else "-" + token
+            inicio = len(self.expresion) - len(token)
+            self.expresion = self.expresion[:inicio] + nuevo
+        self._set_entrada(self.expresion)
 
-    def _calcular_resultado(self, _texto_igual):
-        """Calcula el resultado y lo muestra en la pantalla."""
-        if self.expresion == "" or self.expresion == "0":
-            self._set_entrada("0")
-            return
-
-        # Validación rápida: no terminar con operador
-        if self._ultimo_es_operador():
-            self._set_entrada("Error")
-            self.expresion = ""
-            return
-
-        # Tokenizamos y evaluamos respetando precedencia (* y / antes que + y -)
+    def _calcular_resultado(self, _texto_igual="="):
+        """Calcula con prioridad de multiplicación y división, sin usar eval."""
         try:
-            tokens = self._tokenizar(self.expresion)
+            tokens = self._tokenizar(self.expresion or "0")
             valor = self._evaluar_tokens(tokens)
-            self._set_entrada(self._formatear_decimal(valor))
-
-            # Almacenar el resultado en la expresión para permitir continuar
             self.expresion = self._formatear_decimal(valor)
+            self.resultado_anterior = valor
+            self.resultado_mostrado = True
+            self._set_entrada(self.expresion)
         except ZeroDivisionError:
+            self._limpiar_todo()
             self._set_entrada("Div/0")
-            self.expresion = ""
         except (ValueError, ArithmeticError):
+            self._limpiar_todo()
             self._set_entrada("Error")
-            self.expresion = ""
 
     def _tokenizar(self, expresion):
-        """
-        Convierte una cadena como:
-        "12.5+3×4-2"
-        en una lista de tokens:
-        [12.5, '+', 3.0, '×', 4.0, '-', 2.0]
-        """
+        """Distingue la resta del signo negativo: 5--3 equivale a 5 - (-3)."""
         tokens = []
         i = 0
-
-        # Normalizamos símbolos: usamos ÷ y × internamente como operadores reales
-        operadores = {"+", "-", "×", "÷"}
-
+        espera_numero = True
         while i < len(expresion):
-            ch = expresion[i]
-
-            # Espacios no se usan, pero por si acaso
-            if ch == " ":
+            if expresion[i].isspace():
                 i += 1
                 continue
-
-            # Operadores
-            if ch in operadores:
-                tokens.append(ch)
+            if espera_numero:
+                coincidencia = re.match(r"-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", expresion[i:])
+                if coincidencia is None:
+                    raise ValueError("Se esperaba un número")
+                tokens.append(Decimal(coincidencia.group()))
+                i += len(coincidencia.group())
+            else:
+                if expresion[i] not in "+-×÷":
+                    raise ValueError("Se esperaba un operador")
+                tokens.append(expresion[i])
                 i += 1
-                continue
-
-            # Número (puede tener signo negativo, como -3 o 2.5)
-            # Caso signo negativo: solo si es parte del número (ej: al inicio o después de operador)
-            if ch == "-" and (i == 0 or expresion[i - 1] in operadores):
-                # leer número negativo completo
-                j = i + 1
-                while j < len(expresion) and (expresion[j].isdigit() or expresion[j] == "."):
-                    j += 1
-                num_str = expresion[i:j]
-                tokens.append(float(num_str))
-                i = j
-                continue
-
-            # Número positivo
-            if ch.isdigit() or ch == ".":
-                j = i + 1
-                while j < len(expresion) and (expresion[j].isdigit() or expresion[j] == "."):
-                    j += 1
-                num_str = expresion[i:j]
-                if num_str in ["", "."]:
-                    raise ValueError("Número inválido")
-                tokens.append(float(num_str))
-                i = j
-                continue
-
-            raise ValueError("Caracter inválido")
-
+            espera_numero = not espera_numero
+        if not tokens or espera_numero:
+            raise ValueError("Expresión incompleta")
         return tokens
 
     def _evaluar_tokens(self, tokens):
-        """Evalúa tokens respetando precedencia (*,/ antes que +,-)."""
-        # Primero: resolver × y ÷
-        tokens_intermedios = []
-        i = 0
-
-        while i < len(tokens):
-            token = tokens[i]
-            if isinstance(token, (int, float)):
-                tokens_intermedios.append(float(token))
-                i += 1
-            else:
-                # operador
-                op = token
-                # Debe tener un número antes en la lista intermedia
-                if not tokens_intermedios:
-                    raise ValueError("Expresión inválida")
-
-                # y un número después en tokens original
-                if i + 1 >= len(tokens) or not isinstance(tokens[i + 1], (int, float)):
-                    raise ValueError("Expresión inválida")
-
-                a = tokens_intermedios.pop()
-                b = float(tokens[i + 1])
-
-                if op == "×":
-                    tokens_intermedios.append(a * b)
-                elif op == "÷":
-                    if b == 0:
-                        raise ZeroDivisionError()
-                    tokens_intermedios.append(a / b)
-                elif op in ["+", "-"]:
-                    # No lo hacemos aquí: se deja para el segundo paso
-                    # Guardamos el operador y el siguiente número
-                    # Para esto, en vez de resolver ahora, reinsertamos correctamente.
-                    tokens_intermedios.append(a)
-                    tokens_intermedios.append(op)
-                    i += 1  # avanzamos el operador
-                else:
-                    raise ValueError("Operador inválido")
-
-                # Si resolvimos × o ÷, avanzamos dos posiciones (operador + número)
-                if op in ["×", "÷"]:
-                    i += 2
-
-                # Si era + o -, no debe saltarse el número del siguiente:
-                # ya lo reinsertamos como parte de la lista intermedia al agregar op,
-                # por eso avanzamos solo 1 y el número b será procesado en la siguiente iteración
-                if op in ["+", "-"]:
-                    # el siguiente token es un número, lo añadiremos en la siguiente vuelta
-                    i += 1
-
-        # Segundo paso: resolver + y -
-        # Recorremos tokens_intermedios (que ya no debería contener × o ÷)
-        # Ejemplo: [12.0, '+', 3.0, '-', 2.0]
-        if not tokens_intermedios:
+        """Resuelve × y ÷ primero; después + y - de izquierda a derecha."""
+        if not tokens or len(tokens) % 2 == 0:
             raise ValueError("Expresión inválida")
+        for i, token in enumerate(tokens):
+            if i % 2 == 0:
+                if not isinstance(token, Decimal) or not token.is_finite():
+                    raise ValueError("Número inválido")
+            elif token not in ("+", "-", "×", "÷"):
+                raise ValueError("Operador inválido")
 
-        resultado = tokens_intermedios[0]
-        j = 1
-        while j < len(tokens_intermedios):
-            op = tokens_intermedios[j]
-            if j + 1 >= len(tokens_intermedios):
-                raise ValueError("Expresión incompleta")
-            b = tokens_intermedios[j + 1]
+        with localcontext() as contexto:
+            # Precisión suficiente para conservar los dígitos introducidos.
+            contexto.prec = max(28, sum(len(str(t)) for t in tokens) + 10)
+            terminos = [tokens[0]]
+            for i in range(1, len(tokens), 2):
+                operador, numero = tokens[i], tokens[i + 1]
+                if operador == "×":
+                    terminos[-1] *= numero
+                elif operador == "÷":
+                    if numero == 0:
+                        raise ZeroDivisionError()
+                    terminos[-1] /= numero
+                else:
+                    # Conservamos AMBOS: operador y número siguiente.
+                    terminos.extend([operador, numero])
 
-            if op == "+":
-                resultado += b
-            elif op == "-":
-                resultado -= b
-            else:
-                raise ValueError("Operador inválido en suma/resta")
-            j += 2
-
-        return resultado
-
-    # =======================
-    # Utilidades de expresión
-    # =======================
+            resultado = terminos[0]
+            for i in range(1, len(terminos), 2):
+                if terminos[i] == "+":
+                    resultado += terminos[i + 1]
+                else:
+                    resultado -= terminos[i + 1]
+            return resultado
 
     def _simbolo_operador(self, operador_boton):
         """Convierte los símbolos del botón a los operadores internos."""
@@ -473,46 +371,25 @@ class CalculadoraApp(ctk.CTk):
         return self.expresion[-1] in {"+", "-", "×", "÷"}
 
     def _token_actual(self):
-        """
-        Retorna el número actual (token) desde el último operador hasta el final.
-        Ej: "12+3.5×4" -> token actual "4"
-             "12+3.5×-4" -> token actual "-4" (si corresponde)
-        """
-        if self.expresion == "":
-            return ""
-
-        operadores = {"+", "-", "×", "÷"}
-        # Buscamos el último operador que NO sea parte del signo del número
-        # Para simplificar a nivel medio: tomamos el último operador en la cadena,
-        # y luego ajustamos casos del signo negativo al inicio del token.
-        i = len(self.expresion) - 1
-        while i >= 0 and self.expresion[i] not in operadores:
+        """Obtiene el último número, incluyendo su signo si es negativo."""
+        i = len(self.expresion)
+        while i > 0 and self.expresion[i - 1] in "0123456789.":
             i -= 1
-
-        # i queda en un operador o -1
-        if i < 0:
-            return self.expresion
-
-        # Si el operador encontrado fue '-' y está pegado como signo negativo,
-        # esto es complicado de detectar en todos los casos; para la práctica,
-        # el token actual funcionará bien para esta calculadora.
-        return self.expresion[i + 1:]
+        if i == len(self.expresion):
+            return ""
+        if (i > 0 and self.expresion[i - 1] == "-"
+                and (i == 1 or self.expresion[i - 2] in "+-×÷")):
+            i -= 1
+        return self.expresion[i:]
 
     def _formatear_decimal(self, numero):
-        """Formatea para que no aparezcan muchos decimales innecesarios."""
-        # Redondeo razonable
-        try:
-            # Convertir a float y redondear a 10 decimales
-            n = float(numero)
-            n = round(n, 10)
-
-            # Evitar mostrar .0 si es entero
-            if n.is_integer():
-                return str(int(n))
-
-            return str(n)
-        except Exception:
-            return "Error"
+        """Evita notación científica, ceros finales y errores de tipo float."""
+        if not numero.is_finite():
+            raise ValueError("Resultado no finito")
+        if numero == 0:
+            return "0"
+        texto = format(numero, "f")
+        return texto.rstrip("0").rstrip(".") if "." in texto else texto
 
 
 if __name__ == "__main__":
